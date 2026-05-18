@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - pipeline-net
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092" # Main Kafka port for producers/consumers
+      - "9101:9101" # JMX monitoring/metrics
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT # Define two listeners: one for internal communication (PLAINTEXT) and one for host access (PLAINTEXT_HOST)
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092 # Advertise internal listener for other containers and host listener for external access
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1 # Since we have only one broker, replication factor must be 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+      KAFKA_LOG_RETENTION_HOURS: 6 # Retain logs for 6 hours to prevent disk space issues
+    networks:
+      - pipeline-net
+
+  spark-master:
+    image: apache/spark:3.5.3
+    container_name: spark-master
+    entrypoint: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"] # Official image needs explicit entrypoint. This starts the Master process directly.
+    ports:
+      - "8080:8080"    # Spark Web UI
+      - "7077:7077"    # Master port workers connect to
+    volumes:
+      - ./spark:/opt/spark-apps
+      - ./data:/opt/spark-data
+    networks:
+      - pipeline-net
+
+  spark-worker:
+    image: apache/spark:3.5.3
+    container_name: spark-worker
+    depends_on:
+      - spark-master
+    entrypoint: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
+    # Starts the Worker process and tells it where the master is
+    environment:
+      SPARK_WORKER_MEMORY: 1g # Limit worker memory to 1GB ram
+      SPARK_WORKER_CORES: 2 # Limit worker to 2 CPU cores
+    volumes:
+      - ./spark:/opt/spark-apps
+      - ./data:/opt/spark-data
+    networks:
+      - pipeline-net
+
+networks:
+  pipeline-net:
+    driver: bridge
