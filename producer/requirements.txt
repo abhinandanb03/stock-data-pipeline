@@ -1,4 +1,5 @@
 kafka-python==2.0.2
-yfinance==0.2.38
 pyspark==3.5.0
 curl_cffi==0.15.0
+psycopg2-binary==2.9.12
+redis==7.4.0

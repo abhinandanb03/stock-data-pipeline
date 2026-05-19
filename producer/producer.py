@@ -7,7 +7,7 @@ from kafka import KafkaProducer
 
 # CONFIG 
 FINNHUB_API_KEY = "d85lgh9r01qitd92jp2gd85lgh9r01qitd92jp30"
-KAFKA_BROKER    = "localhost:9092"
+KAFKA_BROKER    = "127.0.0.1:9092"
 TOPIC           = "stock-prices"
 
 SYMBOLS = ["AAPL", "GOOGL", "MSFT", "TSLA", "AMZN", "NVDA"]

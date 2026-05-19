@@ -20,12 +20,14 @@ services:
       - zookeeper
     ports:
       - "9092:9092" # Main Kafka port for producers/consumers
+      - "29092:29092" # Internal port for other containers to connect to Kafka (mapped to 9092 inside the container)
       - "9101:9101" # JMX monitoring/metrics
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT # Define two listeners: one for internal communication (PLAINTEXT) and one for host access (PLAINTEXT_HOST)
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092 # Advertise internal listener for other containers and host listener for external access
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1 # Since we have only one broker, replication factor must be 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
       KAFKA_LOG_RETENTION_HOURS: 6 # Retain logs for 6 hours to prevent disk space issues
@@ -61,6 +63,35 @@ services:
     networks:
       - pipeline-net
 
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    environment:
+      POSTGRES_DB: stocks          # database name
+      POSTGRES_USER: stockuser     # username
+      POSTGRES_PASSWORD: stockpass # password
+    ports:
+      - "5432:5432"               # exposed so you can inspect with pgAdmin
+    volumes:
+      - postgres-data:/var/lib/postgresql/data   # persist data across restarts
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql  # auto-run on first start
+    networks:
+      - pipeline-net
+
+  redis:
+    image: redis:7.2
+    container_name: redis
+    ports:
+      - "6379:6379"               # exposed so Streamlit on Windows can connect
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    # ↑ Limit Redis to 256MB. allkeys-lru evicts least-recently-used
+    #   keys when full. Perfect for live tick data — old ticks auto-expire.
+    networks:
+      - pipeline-net
+
 networks:
   pipeline-net:
     driver: bridge
+
+volumes:
+  postgres-data:
