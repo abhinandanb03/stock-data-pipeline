@@ -37,6 +37,7 @@ def create_spark_session():
                               "/opt/spark-apps/jars/kafka-clients.jar,"
                               "/opt/spark-apps/jars/spark-token-provider-kafka.jar,"
                               "/opt/spark-apps/jars/commons-pool2.jar")
+        .config("spark.driver.extraClassPath", "/opt/spark-apps/jars/postgresql-jdbc.jar")
         .getOrCreate()
     )
 
@@ -93,14 +94,14 @@ def parse_stream(raw_df):
 # ─── SINK 1: RAW TICKS → REDIS ───────────────────────────────────────
 class RedisTickWriter:
     def __call__(self, batch_df, batch_id):
-        # Import inside the function — foreachBatch runs on executors
-        # which need their own imports
+        import sys
+        sys.path.insert(0, "/opt/spark-apps/packages")  # ← must be FIRST
         import redis
         import json
 
         r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
-        rows = batch_df.collect()   # bring micro-batch to driver as list
+        rows = batch_df.collect()
         for row in rows:
             tick = {
                 "symbol":    row["symbol"],
@@ -111,16 +112,10 @@ class RedisTickWriter:
             }
             msg = json.dumps(tick)
 
-            # Publish to symbol channel → Streamlit receives instantly
             r.publish(f"ticks:{row['symbol']}", msg)
-
-            # Store latest price for dashboard cold-start
             r.hset("latest_prices", row["symbol"], row["price"])
-
-            # Keep last 100 ticks per symbol in a Redis list
-            # for the price chart in the dashboard
             r.lpush(f"history:{row['symbol']}", msg)
-            r.ltrim(f"history:{row['symbol']}", 0, 99)  # keep only 100
+            r.ltrim(f"history:{row['symbol']}", 0, 99)
 
         if rows:
             print(f"  [Redis] Published {len(rows)} ticks")
@@ -141,35 +136,51 @@ def write_ticks_to_redis(parsed_df):
 
 # WINDOWED AGGREGATIONS → POSTGRESQL
 class PostgresAggWriter:
-    """
-    Writes 5-minute window aggregations to PostgreSQL.
-
-    Uses INSERT ... ON CONFLICT DO NOTHING (via mode "append" + 
-    the UNIQUE constraint we defined in init.sql) to handle
-    Spark retrying a batch — same window won't be inserted twice.
-
-    Why foreachBatch instead of built-in JDBC sink?
-    The built-in JDBC sink doesn't support update/upsert — it
-    only appends. foreachBatch lets us control exactly how we write.
-    """
     def __call__(self, batch_df, batch_id):
-        if batch_df.count() == 0:
-            return
+        import sys
+        sys.path.insert(0, "/opt/spark-apps/packages")
+        import psycopg2
 
-        # Write to PostgreSQL using Spark's JDBC writer
-        # mode("append") → INSERT (never UPDATE/DELETE)
-        # The UNIQUE constraint in init.sql handles duplicates
-        (
-            batch_df
-            .write
-            .jdbc(
-                url=POSTGRES_URL,
-                table="stock_aggregations",
-                mode="append",
-                properties=POSTGRES_PROPS,
-            )
+        # Use raw JDBC connection for upsert (INSERT ... ON CONFLICT DO NOTHING)
+        # Spark's built-in .jdbc() only does plain INSERT which fails on duplicates
+        rows = batch_df.collect()
+
+        import psycopg2
+        conn = psycopg2.connect(
+            host="postgres",
+            port=5432,
+            dbname="stocks",
+            user="stockuser",
+            password="stockpass"
         )
-        print(f"  [Postgres] Wrote {batch_df.count()} aggregation rows")
+        cursor = conn.cursor()
+
+        upsert_sql = """
+            INSERT INTO stock_aggregations
+                (window_start, window_end, symbol, avg_price, min_price, max_price, tick_count)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (window_start, symbol) DO UPDATE SET
+                avg_price  = EXCLUDED.avg_price,
+                min_price  = EXCLUDED.min_price,
+                max_price  = EXCLUDED.max_price,
+                tick_count = EXCLUDED.tick_count
+        """
+
+        for row in rows:
+            cursor.execute(upsert_sql, (
+                row["window_start"],
+                row["window_end"],
+                row["symbol"],
+                row["avg_price"],
+                row["min_price"],
+                row["max_price"],
+                row["tick_count"],
+            ))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print(f"  [Postgres] Upserted {len(rows)} aggregation rows (batch {batch_id})")
 
 
 def write_aggregations_to_postgres(parsed_df):

@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS stock_aggregations (
 );
 
 -- gives latest window for each symbol or all windows for a symbol in the last hour
-CREATE INDEX idx_agg_symbol_window
+CREATE INDEX idx_agg_symbol_windowgadmin
     ON stock_aggregations(symbol, window_start DESC);
 
 -- ALERTS TABLE Stores every price/volume alert Spark detects

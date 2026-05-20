@@ -10,6 +10,9 @@ services:
       ZOOKEEPER_TICK_TIME: 2000
     ports:
       - "2181:2181"
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
     networks:
       - pipeline-net
 
@@ -31,16 +34,21 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1 # Since we have only one broker, replication factor must be 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
       KAFKA_LOG_RETENTION_HOURS: 6 # Retain logs for 6 hours to prevent disk space issues
+    volumes:
+      - kafka-data:/var/lib/kafka/data
     networks:
       - pipeline-net
 
   spark-master:
     image: apache/spark:3.5.3
     container_name: spark-master
-    entrypoint: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"] # Official image needs explicit entrypoint. This starts the Master process directly.
+    user: root
+    entrypoint: ["/bin/bash", "/opt/spark-apps/startup.sh"]
+    environment:
+      SPARK_ROLE: master
     ports:
-      - "8080:8080"    # Spark Web UI
-      - "7077:7077"    # Master port workers connect to
+      - "8080:8080"
+      - "7077:7077"
     volumes:
       - ./spark:/opt/spark-apps
       - ./data:/opt/spark-data
@@ -50,13 +58,14 @@ services:
   spark-worker:
     image: apache/spark:3.5.3
     container_name: spark-worker
+    user: root
     depends_on:
       - spark-master
-    entrypoint: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
-    # Starts the Worker process and tells it where the master is
+    entrypoint: ["/bin/bash", "/opt/spark-apps/startup.sh"]
     environment:
-      SPARK_WORKER_MEMORY: 1g # Limit worker memory to 1GB ram
-      SPARK_WORKER_CORES: 2 # Limit worker to 2 CPU cores
+      SPARK_ROLE: worker
+      SPARK_WORKER_MEMORY: 1g
+      SPARK_WORKER_CORES: 2
     volumes:
       - ./spark:/opt/spark-apps
       - ./data:/opt/spark-data
@@ -95,3 +104,6 @@ networks:
 
 volumes:
   postgres-data:
+  kafka-data:
+  zookeeper-data:
+  zookeeper-logs:
